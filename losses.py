@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 
 loss_fn = torch.nn.L1Loss()
+#loss_fn = torch.nn.MSELoss()
 
 
 def ad_loss(

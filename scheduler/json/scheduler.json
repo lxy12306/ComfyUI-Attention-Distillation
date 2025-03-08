@@ -1,0 +1,9 @@
+{
+    "scheduler": [
+        "DDIMScheduler",
+        "DDPMScheduler",
+        "PNDMScheduler",
+        "EulerAncestralDiscreteScheduler",
+        "KDPM2AncestralDiscreteScheduler"
+    ]
+}

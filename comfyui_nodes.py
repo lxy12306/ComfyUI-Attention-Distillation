@@ -2,6 +2,7 @@ import os
 import torch
 from PIL import Image
 from diffusers import DDIMScheduler
+from diffusers import PNDMScheduler
 
 from comfy.comfy_types import IO
 import comfy.model_management as mm
@@ -87,24 +88,32 @@ class LoadDistiller:
     def INPUT_TYPES(s):
         return {
             'required': {
+                "base_model_path": ("STRING", {"default": "F:\share\model"}),
                 "model": (['stable-diffusion-v1-5'], {"default": "stable-diffusion-v1-5"}),
                 "precision": (['bf16', 'fp32'], {"default": 'bf16'}),
-            },  
+            },
+            "optional": {
+                "scheduler": ("SCHEDULER",),
+            },
         }
 
     @torch.inference_mode(False)
-    def load_model(self, model, precision):
+    def load_model(self, base_model_path, model, precision, scheduler = None):
         weight_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[precision]
         if precision == 'fp32':
             precision = 'no'
         device = mm.get_torch_device()
         
-        model_name = os.path.join(folder_paths.models_dir, 'diffusers', model)
+        if base_model_path == "":
+            base_model_path = folder_paths.models_dir
+
+        model_name = os.path.join(base_model_path, 'diffusers', model)
         if not os.path.exists(model_name):
             print(f"Please download target model to : {model_name}")
         
         try:
-            scheduler = DDIMScheduler.from_pretrained(model_name, subfolder='scheduler')
+            if scheduler == None :
+                scheduler = PNDMScheduler.from_pretrained(model_name, subfolder='scheduler')
             distiller = ADPipeline.from_pretrained(
                 model_name, scheduler=scheduler, safety_checker=None, torch_dtype=weight_dtype
             ).to(device)
@@ -137,7 +146,8 @@ class LoadDistiller:
                     hf_hub_download(repo_id=repo_name, filename=file_name, local_dir=model_name)
                 pbar.update()
 
-            scheduler = DDIMScheduler.from_pretrained(model_name, subfolder='scheduler')
+            if scheduler == None :
+                scheduler = PNDMScheduler.from_pretrained(model_name, subfolder='scheduler')
             distiller = ADPipeline.from_pretrained(
                 model_name, scheduler=scheduler, safety_checker=None, torch_dtype=weight_dtype
             ).to(device)
@@ -155,12 +165,13 @@ class ADOptimizer:
                 "distiller": ("DISTILLER",),
                 "content": ("IMAGE",),
                 "style": ("IMAGE",),
-                "steps": ("INT", {"default": 200, "min": 1, "max": 500, "step": 1}),
+                "layer_num": ("INT", {"default": 6, "min": 1, "max": 16, "step": 1}),
+                "steps": ("INT", {"default": 200, "min": 1, "max": 1000, "step": 1}),
                 "content_weight": ("FLOAT", {"default": 0.25, "min": 0., "max": 10., "step": 0.001}),
                 "lr": ("FLOAT", {"default": 0.05, "min": 0.001, "max": 0.5, "step": 0.001}),
                 "height": ("INT", {"default": 512, "min": 256, "max": 4096, "step": 8}),
                 "width": ("INT", {"default": 512, "min": 256, "max": 4096, "step": 8}),
-                "seed": ("INT", {"default": 2025, "min": 0, "max": 0xffffffffffffffff, "step": 1}),
+                "seed": ("INT", {"default": 2025, "min": 0, "max": 0xffffffff, "step": 1}),
             }
         }
     RETURN_TYPES = ("IMAGE",)
@@ -169,14 +180,14 @@ class ADOptimizer:
     CATEGORY = "AttentionDistillationWrapper"
 
     @torch.inference_mode(False)
-    def process(self, distiller, content, style, steps, content_weight, lr, height, width, seed):
+    def process(self, distiller, content, style, layer_num, steps, content_weight, lr, height, width, seed):
         precision = distiller['precision']
         attn_distiller = distiller['distiller']
 
         style = to_tensor(resize(style, (512, 512))).unsqueeze(0)
         content = to_tensor(content).unsqueeze(0)
 
-        controller = Controller(self_layers=(10, 16))
+        controller = Controller(self_layers=(16 - layer_num, 16))
         set_seed(seed)
 
         images = attn_distiller.optimize(
@@ -206,13 +217,14 @@ class ADSampler:
                 "style": ("IMAGE",),
                 "positive": (IO.CONDITIONING,),
                 "negative": (IO.CONDITIONING,),
+                "layer_num": ("INT", {"default": 6, "min": 1, "max": 16, "step": 1}),
                 "steps": ("INT", {"default": 50, "min": 1, "max": 200, "step": 1}),
                 "lr": ("FLOAT", {"default": 0.015, "min": 0.001, "max": 1., "step": 0.001}),
                 "iters": ("INT", {"default": 2, "min": 0, "max": 5, "step": 1}),
                 "cfg": ("FLOAT", {"default": 7.5, "min": 1., "max": 20., "step": 0.01}),
                 "eta": ("FLOAT", {"default": 0., "min": 0., "max": 1., "step": 0.01}),
                 "num_images_per_prompt": ("INT", {"default": 1, "min": 1, "max": 5, "step": 1}),
-                "seed": ("INT", {"default": 2025, "min": 0, "max": 0xffffffffffffffff}),
+                "seed": ("INT", {"default": 2025, "min": 0, "max": 0xffffffff}),
                 "height": ("INT", {"default": 512, "min": 256, "max": 4096, "step": 8}),
                 "width": ("INT", {"default": 512, "min": 256, "max": 4096, "step": 8}),
             }
@@ -223,10 +235,10 @@ class ADSampler:
     CATEGORY = "AttentionDistillationWrapper"
     
     @torch.inference_mode(False)
-    def process(self, distiller, style, positive, negative, steps, lr, iters, cfg, eta, num_images_per_prompt, seed, height, width):
+    def process(self, distiller, style, positive, negative, layer_num, steps, lr, iters, cfg, eta, num_images_per_prompt, seed, height, width):
         precision = distiller['precision']
         attn_distiller = distiller['distiller']
-        controller = Controller(self_layers=(10, 16))
+        controller = Controller(self_layers=(16 - layer_num, 16))
         
         style = to_tensor(resize(style, (512, 512))).unsqueeze(0)
 

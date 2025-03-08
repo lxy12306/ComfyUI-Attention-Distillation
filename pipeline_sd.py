@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from accelerate import Accelerator
 from diffusers import StableDiffusionPipeline
 from diffusers.image_processor import PipelineImageInput
-from .losses import ad_loss, q_loss
+from .losses import ad_loss, q_loss, qk_loss, qkv_loss
 from .utils import DataCache, register_attn_control, adain
 from tqdm import tqdm
 
